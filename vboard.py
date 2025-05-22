@@ -73,6 +73,9 @@ class VirtualKeyboard(Gtk.Window):
             uinput.KEY_LEFTMETA: False,
             uinput.KEY_RIGHTMETA: False
         }
+        # Track currently pressed modifiers for multi-touch
+        self.pressed_modifiers = set()
+
         self.colors = [
             ("Black", "0,0,0"),
             ("Red", "255,0,0"),
@@ -286,6 +289,10 @@ class VirtualKeyboard(Gtk.Window):
        #grid button:hover {{
             border: 1px solid #00CACB;
         }}
+       /* Highlight when key is pressed */
+       #grid button.pressed {{
+           background-color: rgba(0, 172, 203, 0.5);
+       }}
 
        tooltip {{
             color: white;
@@ -319,7 +326,12 @@ class VirtualKeyboard(Gtk.Window):
                     button = Gtk.Button(label=key_label[:-2])
                 else:
                     button = Gtk.Button(label=key_label)
-                button.connect("clicked", self.on_button_click, key_event)
+                # Handle touch and mouse press/release for multi-touch
+                button.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK | Gdk.EventMask.TOUCH_MASK)
+                button.connect("button-press-event", self.on_button_press, key_event)
+                button.connect("button-release-event", self.on_button_release, key_event)
+                # Handle touch begin/end as press/release for multi-touch
+                button.connect("touch-event", self.on_touch_event, key_event)
                 self.row_buttons.append(button)
                 if key_label == "Space": width=12
                 elif key_label == "CapsLock": width=3
@@ -373,6 +385,39 @@ class VirtualKeyboard(Gtk.Window):
             if active:
                 self.device.emit(mod_key, 0)
                 self.modifiers[mod_key] = False
+
+
+    def on_button_press(self, widget, event, key_event):
+        # Highlight this button
+        widget.get_style_context().add_class("pressed")
+        # Multi-touch press: emit modifier or normal key
+        if key_event in self.pressed_modifiers or key_event in self.modifiers:
+            # Modifier key pressed
+            if key_event not in self.pressed_modifiers:
+                self.device.emit(key_event, 1)
+                self.pressed_modifiers.add(key_event)
+        else:
+            # Normal key: emit with active modifiers
+            self.device.emit(key_event, 1)
+            self.device.emit(key_event, 0)
+        return True
+
+    def on_button_release(self, widget, event, key_event):
+        # Remove highlight
+        widget.get_style_context().remove_class("pressed")
+        # Multi-touch release: release modifiers
+        if key_event in self.pressed_modifiers:
+            self.device.emit(key_event, 0)
+            self.pressed_modifiers.remove(key_event)
+        return True
+
+    def on_touch_event(self, widget, event, key_event):
+        # Route touch begin/end to press/release for multi-touch
+        if event.type == Gdk.EventType.TOUCH_BEGIN:
+            return self.on_button_press(widget, event, key_event)
+        elif event.type == Gdk.EventType.TOUCH_END:
+            return self.on_button_release(widget, event, key_event)
+        return False
 
 
     def read_settings(self):
